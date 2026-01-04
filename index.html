@@ -276,7 +276,7 @@ input:disabled {
 
 .candidate-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto auto 1fr auto auto;
   gap: 1rem;
   align-items: center;
   padding: 1rem;
@@ -290,9 +290,32 @@ input:disabled {
   border-color: var(--primary);
 }
 
+.candidate-row.selected {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: var(--primary);
+}
+
 .candidate-row.high { border-left: 3px solid var(--success); }
 .candidate-row.medium { border-left: 3px solid var(--warning); }
 .candidate-row.low { border-left: 3px solid var(--danger); }
+
+.candidate-checkbox {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.bahr-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  background: var(--warning);
+  color: #000;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  margin-left: 0.5rem;
+}
 
 .confidence .badge {
   display: inline-block;
@@ -336,6 +359,45 @@ input:disabled {
   text-align: center;
   padding: 3rem;
   color: var(--text-muted);
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--primary);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.bulk-actions .selection-count {
+  color: white;
+  font-weight: 500;
+}
+
+.bulk-actions button {
+  background: white;
+  color: var(--primary);
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.bulk-actions button:hover {
+  background: #e2e8f0;
+}
+
+.bulk-actions .clear-btn {
+  background: transparent;
+  color: white;
+  border: 1px solid white;
+}
+
+.bulk-actions .clear-btn:hover {
+  background: rgba(255,255,255,0.1);
 }
 
 /* Review */
@@ -538,7 +600,17 @@ input:disabled {
 
         <div class="scan-filters hidden" id="scanFilters">
           <input type="text" placeholder="Filter by name..." id="filterInput" />
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+            <input type="checkbox" id="bahrOnlyFilter" style="width: auto;" />
+            <span class="text-muted">Bahr Clients only</span>
+          </label>
           <span class="text-muted" id="filterCount"></span>
+        </div>
+
+        <div class="bulk-actions hidden" id="bulkActions">
+          <span class="selection-count" id="selectionCount">0 selected</span>
+          <button id="bulkMergeBtn">Bulk Merge Selected</button>
+          <button class="clear-btn" id="clearSelectionBtn">Clear Selection</button>
         </div>
 
         <div class="candidate-list" id="candidateList"></div>
@@ -599,6 +671,7 @@ let state = {
   records: [],
   candidates: [],
   selectedCandidate: null,
+  selectedCandidates: new Set(), // For multi-select bulk merge
   selections: {},
   logs: []
 };
@@ -621,7 +694,12 @@ const elements = {
   scanBtn: document.getElementById('scanBtn'),
   scanFilters: document.getElementById('scanFilters'),
   filterInput: document.getElementById('filterInput'),
+  bahrOnlyFilter: document.getElementById('bahrOnlyFilter'),
   filterCount: document.getElementById('filterCount'),
+  bulkActions: document.getElementById('bulkActions'),
+  selectionCount: document.getElementById('selectionCount'),
+  bulkMergeBtn: document.getElementById('bulkMergeBtn'),
+  clearSelectionBtn: document.getElementById('clearSelectionBtn'),
   candidateList: document.getElementById('candidateList'),
   scanEmpty: document.getElementById('scanEmpty'),
   reviewConfidence: document.getElementById('reviewConfidence'),
@@ -703,6 +781,12 @@ function getName(record) {
   return nameField || record.id;
 }
 
+// Check if record is a Bahr Client
+function isBahrClient(record) {
+  const fields = record.fields;
+  return fields['Bahr Client'] === true || fields['Bahr Client'] === 'true' || fields['Bahr Client'] === 1;
+}
+
 // Find duplicates in records
 function findDuplicates(records) {
   const candidates = [];
@@ -779,28 +863,54 @@ function formatValue(val) {
 // Render candidates list
 function renderCandidates() {
   const filter = elements.filterInput.value.toLowerCase();
-  const filtered = filter ?
-    state.candidates.filter(c => c.nameA.toLowerCase().includes(filter) || c.nameB.toLowerCase().includes(filter)) :
-    state.candidates;
+  const bahrOnly = elements.bahrOnlyFilter.checked;
+
+  let filtered = state.candidates;
+
+  // Filter by Bahr Clients only
+  if (bahrOnly) {
+    filtered = filtered.filter(c => isBahrClient(c.recordA) || isBahrClient(c.recordB));
+  }
+
+  // Filter by name search
+  if (filter) {
+    filtered = filtered.filter(c => c.nameA.toLowerCase().includes(filter) || c.nameB.toLowerCase().includes(filter));
+  }
 
   elements.scanFilters.classList.toggle('hidden', state.candidates.length === 0);
   elements.scanEmpty.classList.toggle('hidden', state.candidates.length > 0);
   elements.filterCount.textContent = `${filtered.length} of ${state.candidates.length} matches`;
 
+  // Update bulk actions bar
+  updateBulkActionsBar();
+
   const toShow = filtered.slice(0, 100);
-  elements.candidateList.innerHTML = toShow.map(c => `
-    <div class="candidate-row ${c.confidence >= 90 ? 'high' : c.confidence >= 75 ? 'medium' : 'low'}" data-id="${c.id}">
+  elements.candidateList.innerHTML = toShow.map(c => {
+    const isSelected = state.selectedCandidates.has(c.id);
+    const bahrA = isBahrClient(c.recordA);
+    const bahrB = isBahrClient(c.recordB);
+
+    return `
+    <div class="candidate-row ${c.confidence >= 90 ? 'high' : c.confidence >= 75 ? 'medium' : 'low'} ${isSelected ? 'selected' : ''}" data-id="${c.id}">
+      <input type="checkbox" class="candidate-checkbox" ${isSelected ? 'checked' : ''} data-id="${c.id}" />
       <div class="confidence"><span class="badge">${c.confidence}%</span></div>
       <div class="names">
-        <div class="name">${escapeHtml(c.nameA)}</div>
+        <div class="name">${escapeHtml(c.nameA)}${bahrA ? '<span class="bahr-badge">BAHR</span>' : ''}</div>
         <div class="arrow">+</div>
-        <div class="name">${escapeHtml(c.nameB)}</div>
+        <div class="name">${escapeHtml(c.nameB)}${bahrB ? '<span class="bahr-badge">BAHR</span>' : ''}</div>
       </div>
       <div class="reasons">${c.reasons.map(r => `<span class="tag">${r}</span>`).join('')}</div>
-      <button class="btn small">Review</button>
+      <button class="btn small review-btn">Review</button>
     </div>
-  `).join('') + (filtered.length > 100 ?
+  `}).join('') + (filtered.length > 100 ?
     `<div class="text-muted" style="padding: 1rem; text-align: center;">Showing first 100 of ${filtered.length} matches</div>` : '');
+}
+
+// Update bulk actions bar visibility
+function updateBulkActionsBar() {
+  const count = state.selectedCandidates.size;
+  elements.bulkActions.classList.toggle('hidden', count === 0);
+  elements.selectionCount.textContent = `${count} pair${count !== 1 ? 's' : ''} selected`;
 }
 
 // Escape HTML
@@ -1050,6 +1160,191 @@ async function merge() {
   }
 }
 
+// Bulk merge multiple candidate pairs
+async function bulkMerge() {
+  const selectedIds = Array.from(state.selectedCandidates);
+  if (selectedIds.length === 0) {
+    addLog('No candidates selected', 'warning');
+    return;
+  }
+
+  // Collect all unique records from selected pairs
+  const recordMap = new Map(); // recordId -> record
+  const recordsToDelete = new Set();
+
+  for (const candidateId of selectedIds) {
+    const candidate = state.candidates.find(c => c.id === candidateId);
+    if (!candidate) continue;
+
+    // Add both records to the map
+    if (!recordMap.has(candidate.recordA.id)) {
+      recordMap.set(candidate.recordA.id, candidate.recordA);
+    }
+    if (!recordMap.has(candidate.recordB.id)) {
+      recordMap.set(candidate.recordB.id, candidate.recordB);
+    }
+  }
+
+  // Build a graph of connected records (they should all merge into one)
+  const unionFind = new Map();
+
+  function find(id) {
+    if (!unionFind.has(id)) unionFind.set(id, id);
+    if (unionFind.get(id) !== id) {
+      unionFind.set(id, find(unionFind.get(id)));
+    }
+    return unionFind.get(id);
+  }
+
+  function union(a, b) {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) {
+      unionFind.set(rootA, rootB);
+    }
+  }
+
+  // Union all connected pairs
+  for (const candidateId of selectedIds) {
+    const candidate = state.candidates.find(c => c.id === candidateId);
+    if (!candidate) continue;
+    union(candidate.recordA.id, candidate.recordB.id);
+  }
+
+  // Group records by their root (connected component)
+  const groups = new Map(); // rootId -> [records]
+  for (const [recordId, record] of recordMap) {
+    const root = find(recordId);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(record);
+  }
+
+  elements.bulkMergeBtn.disabled = true;
+  elements.bulkMergeBtn.textContent = 'Merging...';
+  elements.clearSelectionBtn.disabled = true;
+
+  addLog(`Starting bulk merge of ${groups.size} group(s) from ${recordMap.size} records...`, 'info');
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  try {
+    for (const [rootId, records] of groups) {
+      if (records.length < 2) continue;
+
+      addLog(`Merging group of ${records.length} records...`, 'info');
+
+      // Sort records: prioritize Bahr Clients first, then by number of filled fields
+      records.sort((a, b) => {
+        const aIsBahr = isBahrClient(a) ? 1 : 0;
+        const bIsBahr = isBahrClient(b) ? 1 : 0;
+        if (bIsBahr !== aIsBahr) return bIsBahr - aIsBahr; // Bahr clients first
+
+        // Then by number of non-empty fields
+        const aFields = Object.values(a.fields).filter(v => v !== null && v !== undefined && v !== '').length;
+        const bFields = Object.values(b.fields).filter(v => v !== null && v !== undefined && v !== '').length;
+        return bFields - aFields;
+      });
+
+      // First record is the survivor
+      const survivor = records[0];
+      const toMerge = records.slice(1);
+
+      // Build merged fields - take first non-empty value for each field
+      const allFieldNames = [...new Set(records.flatMap(r => Object.keys(r.fields)))];
+      const mergedFields = {};
+
+      for (const fieldName of allFieldNames) {
+        if (isComputed(fieldName)) continue;
+
+        // Find first non-empty value across all records (survivor first, then others)
+        for (const record of records) {
+          const val = record.fields[fieldName];
+          if (val !== undefined && val !== null && val !== '') {
+            mergedFields[fieldName] = val;
+            break;
+          }
+        }
+      }
+
+      try {
+        // Update survivor record
+        const updateRes = await fetch(
+          `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}/${survivor.id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${state.credentials.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ fields: mergedFields })
+          }
+        );
+
+        if (!updateRes.ok) {
+          const err = await updateRes.json().catch(() => ({}));
+          throw new Error(err.error?.message || 'Failed to update record');
+        }
+
+        const updatedRecord = await updateRes.json();
+
+        // Delete duplicate records
+        for (const record of toMerge) {
+          addLog(`Deleting duplicate: ${getName(record)}`, 'info');
+
+          const deleteRes = await fetch(
+            `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}/${record.id}`,
+            {
+              method: 'DELETE',
+              headers: {
+                Authorization: `Bearer ${state.credentials.apiKey}`
+              }
+            }
+          );
+
+          if (!deleteRes.ok) {
+            const err = await deleteRes.json().catch(() => ({}));
+            addLog(`Warning: Failed to delete ${getName(record)}: ${err.error?.message || 'Unknown error'}`, 'warning');
+          } else {
+            recordsToDelete.add(record.id);
+          }
+
+          // Rate limiting
+          await new Promise(r => setTimeout(r, 200));
+        }
+
+        // Update local state
+        state.records = state.records.filter(r => !recordsToDelete.has(r.id));
+        const idx = state.records.findIndex(r => r.id === survivor.id);
+        if (idx >= 0) state.records[idx] = updatedRecord;
+
+        successCount++;
+        addLog(`Successfully merged ${records.length} records into "${getName(survivor)}"`, 'success');
+      } catch (err) {
+        addLog(`Failed to merge group: ${err.message}`, 'error');
+        errorCount++;
+      }
+
+      // Rate limiting between groups
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Remove processed candidates and clear selection
+    state.candidates = state.candidates.filter(c =>
+      !recordsToDelete.has(c.recordA.id) && !recordsToDelete.has(c.recordB.id)
+    );
+    state.selectedCandidates.clear();
+
+    addLog(`Bulk merge complete: ${successCount} successful, ${errorCount} failed`, successCount > 0 ? 'success' : 'error');
+    elements.recordCount.textContent = `${state.records.length} records loaded`;
+    renderCandidates();
+  } finally {
+    elements.bulkMergeBtn.disabled = false;
+    elements.bulkMergeBtn.textContent = 'Bulk Merge Selected';
+    elements.clearSelectionBtn.disabled = false;
+  }
+}
+
 // Disconnect
 function disconnect() {
   state = {
@@ -1059,11 +1354,13 @@ function disconnect() {
     records: [],
     candidates: [],
     selectedCandidate: null,
+    selectedCandidates: new Set(),
     selections: {},
     logs: state.logs
   };
   elements.candidateList.innerHTML = '';
   elements.scanFilters.classList.add('hidden');
+  elements.bulkActions.classList.add('hidden');
   elements.scanEmpty.classList.remove('hidden');
   elements.scanBtn.textContent = 'Scan for Duplicates';
   setView('setup');
@@ -1079,14 +1376,55 @@ elements.scanBtn.addEventListener('click', scan);
 
 elements.filterInput.addEventListener('input', renderCandidates);
 
+elements.bahrOnlyFilter.addEventListener('change', renderCandidates);
+
+elements.bulkMergeBtn.addEventListener('click', bulkMerge);
+
+elements.clearSelectionBtn.addEventListener('click', () => {
+  state.selectedCandidates.clear();
+  renderCandidates();
+});
+
 elements.candidateList.addEventListener('click', (e) => {
-  const row = e.target.closest('.candidate-row');
-  if (row) {
+  // Handle checkbox clicks
+  if (e.target.classList.contains('candidate-checkbox')) {
+    const id = e.target.dataset.id;
+    if (e.target.checked) {
+      state.selectedCandidates.add(id);
+    } else {
+      state.selectedCandidates.delete(id);
+    }
+    updateBulkActionsBar();
+    // Update the row styling without full re-render
+    const row = e.target.closest('.candidate-row');
+    row.classList.toggle('selected', e.target.checked);
+    return;
+  }
+
+  // Handle review button clicks
+  if (e.target.classList.contains('review-btn')) {
+    const row = e.target.closest('.candidate-row');
     const id = row.dataset.id;
     state.selectedCandidate = state.candidates.find(c => c.id === id);
     state.selections = {};
     renderReviewFields();
     setView('review');
+    return;
+  }
+
+  // Clicking on row (not checkbox or button) toggles selection
+  const row = e.target.closest('.candidate-row');
+  if (row && !e.target.classList.contains('candidate-checkbox') && !e.target.classList.contains('review-btn')) {
+    const id = row.dataset.id;
+    const checkbox = row.querySelector('.candidate-checkbox');
+    checkbox.checked = !checkbox.checked;
+    if (checkbox.checked) {
+      state.selectedCandidates.add(id);
+    } else {
+      state.selectedCandidates.delete(id);
+    }
+    row.classList.toggle('selected', checkbox.checked);
+    updateBulkActionsBar();
   }
 });
 
