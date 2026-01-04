@@ -456,6 +456,117 @@ input:disabled {
   display: none !important;
 }
 
+/* History View */
+.history {
+  padding: 1rem;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.history-entry {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  border-left: 3px solid var(--success);
+}
+
+.history-entry.undone {
+  border-left-color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.history-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.history-time {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.history-names {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.history-names .survivor {
+  color: var(--success);
+  font-weight: 500;
+}
+
+.history-names .merged {
+  color: var(--warning);
+  text-decoration: line-through;
+}
+
+.history-changes {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.history-changes summary {
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+}
+
+.history-changes-list {
+  padding-left: 1rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.history-change-item {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--bg-input);
+}
+
+.history-change-field {
+  color: var(--primary);
+}
+
+.history-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn.undo {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: white;
+}
+
+.btn.undo:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: #dc2626;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .app {
@@ -492,6 +603,7 @@ input:disabled {
       <h1>Airtable Dedupe</h1>
       <nav class="nav hidden" id="nav">
         <button id="scanNavBtn" class="active">Scan</button>
+        <button id="historyNavBtn">History</button>
         <button id="disconnectBtn">Disconnect</button>
       </nav>
     </header>
@@ -578,6 +690,25 @@ input:disabled {
           <button class="btn primary" id="mergeBtn">Merge Records</button>
         </div>
       </div>
+
+      <!-- History View -->
+      <div class="history hidden" id="historyView">
+        <div class="history-header">
+          <div>
+            <h2>Merge History</h2>
+            <p class="text-muted" id="historyCount">0 merges recorded</p>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn" id="clearHistoryBtn">Clear History</button>
+          </div>
+        </div>
+
+        <div class="history-list" id="historyList"></div>
+
+        <div class="empty" id="historyEmpty">
+          <p>No merges recorded yet. Merge history will appear here.</p>
+        </div>
+      </div>
     </main>
 
     <aside class="log-panel">
@@ -603,17 +734,24 @@ let state = {
   candidates: [],
   selectedCandidate: null,
   selections: {},
-  logs: []
+  logs: [],
+  mergeHistory: [] // Track all merges for undo capability
 };
 
 // DOM Elements
 const elements = {
   nav: document.getElementById('nav'),
   scanNavBtn: document.getElementById('scanNavBtn'),
+  historyNavBtn: document.getElementById('historyNavBtn'),
   disconnectBtn: document.getElementById('disconnectBtn'),
   setupView: document.getElementById('setupView'),
   scanView: document.getElementById('scanView'),
   reviewView: document.getElementById('reviewView'),
+  historyView: document.getElementById('historyView'),
+  historyCount: document.getElementById('historyCount'),
+  historyList: document.getElementById('historyList'),
+  historyEmpty: document.getElementById('historyEmpty'),
+  clearHistoryBtn: document.getElementById('clearHistoryBtn'),
   setupForm: document.getElementById('setupForm'),
   setupError: document.getElementById('setupError'),
   apiKey: document.getElementById('apiKey'),
@@ -663,8 +801,11 @@ function setView(view) {
   elements.setupView.classList.toggle('hidden', view !== 'setup');
   elements.scanView.classList.toggle('hidden', view !== 'scan');
   elements.reviewView.classList.toggle('hidden', view !== 'review');
+  elements.historyView.classList.toggle('hidden', view !== 'history');
   elements.nav.classList.toggle('hidden', view === 'setup');
   elements.scanNavBtn.classList.toggle('active', view === 'scan');
+  elements.historyNavBtn.classList.toggle('active', view === 'history');
+  if (view === 'history') renderHistory();
 }
 
 // Similarity calculation (Levenshtein-based)
@@ -1008,6 +1149,58 @@ async function scan() {
   }
 }
 
+// Build merge history entry for Matter_Flatpack
+function buildMergeHistoryEntry(recordA, recordB, mergedFields, selections) {
+  const timestamp = new Date().toISOString();
+  const fieldChanges = [];
+
+  // Track which fields were taken from record B (the merged/deleted record)
+  for (const [fieldName, choice] of Object.entries(selections)) {
+    if (choice === 'B') {
+      fieldChanges.push({
+        field: fieldName,
+        fromRecord: recordB.id,
+        oldValue: recordA.fields[fieldName],
+        newValue: recordB.fields[fieldName]
+      });
+    }
+  }
+
+  return {
+    mergeId: `merge_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    timestamp,
+    action: 'MERGE',
+    survivorRecordId: recordA.id,
+    deletedRecordId: recordB.id,
+    deletedRecordFields: recordB.fields, // Store full record for undo
+    survivorFieldsBefore: { ...recordA.fields }, // Snapshot before merge
+    fieldChanges,
+    confidence: state.selectedCandidate.confidence,
+    reasons: state.selectedCandidate.reasons
+  };
+}
+
+// Append merge history to Matter_Flatpack field
+function appendToMatterFlatpack(existingValue, historyEntry) {
+  let history = [];
+
+  // Parse existing Matter_Flatpack if it exists
+  if (existingValue) {
+    try {
+      const parsed = JSON.parse(existingValue);
+      history = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      // If not valid JSON, start fresh but preserve old value as note
+      history = [{ note: 'Pre-existing value', value: existingValue, timestamp: new Date().toISOString() }];
+    }
+  }
+
+  // Add new entry
+  history.push(historyEntry);
+
+  return JSON.stringify(history, null, 2);
+}
+
 // Execute merge
 async function merge() {
   elements.mergeBtn.disabled = true;
@@ -1016,8 +1209,19 @@ async function merge() {
   addLog('Starting merge...', 'info');
 
   try {
+    const { recordA, recordB, nameA, nameB, confidence, reasons } = state.selectedCandidate;
     const mergedFields = buildMergedFields();
-    const { recordA, recordB } = state.selectedCandidate;
+
+    // Build history entry BEFORE making changes
+    const historyEntry = buildMergeHistoryEntry(recordA, recordB, mergedFields, state.selections);
+
+    // Append to Matter_Flatpack field if it exists in schema
+    const hasMatterFlatpack = state.schema?.fields?.some(f => f.name === 'Matter_Flatpack');
+    if (hasMatterFlatpack) {
+      const existingFlatpack = recordA.fields['Matter_Flatpack'] || '';
+      mergedFields['Matter_Flatpack'] = appendToMatterFlatpack(existingFlatpack, historyEntry);
+      addLog('Recording merge history in Matter_Flatpack...', 'info');
+    }
 
     // Update survivor record (A)
     addLog('Updating survivor record...', 'info');
@@ -1055,6 +1259,17 @@ async function merge() {
       throw new Error(err.error?.message || 'Failed to delete record');
     }
 
+    // Store in local merge history for undo capability
+    state.mergeHistory.unshift({
+      ...historyEntry,
+      nameA,
+      nameB,
+      canUndo: true // Flag to indicate this can still be undone
+    });
+
+    // Save merge history to sessionStorage
+    saveMergeHistory();
+
     // Remove merged records from state
     state.records = state.records.filter(r => r.id !== recordB.id);
     const updatedRecord = await updateRes.json();
@@ -1065,6 +1280,7 @@ async function merge() {
     state.candidates = state.candidates.filter(c => c.id !== state.selectedCandidate.id);
 
     addLog('Merge completed successfully!', 'success');
+    addLog(`History recorded (ID: ${historyEntry.mergeId})`, 'info');
     state.selectedCandidate = null;
     state.selections = {};
     elements.recordCount.textContent = `${state.records.length} records loaded`;
@@ -1079,6 +1295,211 @@ async function merge() {
   }
 }
 
+// Undo a merge operation
+async function undoMerge(mergeId) {
+  const historyEntry = state.mergeHistory.find(h => h.mergeId === mergeId);
+  if (!historyEntry) {
+    addLog(`Merge ${mergeId} not found in history`, 'error');
+    return;
+  }
+
+  if (!historyEntry.canUndo) {
+    addLog('This merge has already been undone', 'warning');
+    return;
+  }
+
+  addLog(`Undoing merge ${mergeId}...`, 'info');
+
+  try {
+    // Step 1: Restore the survivor record to its pre-merge state
+    addLog('Restoring survivor record...', 'info');
+    const survivorFields = { ...historyEntry.survivorFieldsBefore };
+
+    // Remove computed fields
+    for (const fieldName of Object.keys(survivorFields)) {
+      if (isComputed(fieldName)) {
+        delete survivorFields[fieldName];
+      }
+    }
+
+    // Update Matter_Flatpack to record the undo
+    const hasMatterFlatpack = state.schema?.fields?.some(f => f.name === 'Matter_Flatpack');
+    if (hasMatterFlatpack) {
+      const existingFlatpack = survivorFields['Matter_Flatpack'] || '';
+      const undoEntry = {
+        action: 'UNDO',
+        originalMergeId: mergeId,
+        timestamp: new Date().toISOString(),
+        restoredRecordId: historyEntry.deletedRecordId
+      };
+      survivorFields['Matter_Flatpack'] = appendToMatterFlatpack(existingFlatpack, undoEntry);
+    }
+
+    const restoreRes = await fetch(
+      `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}/${historyEntry.survivorRecordId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${state.credentials.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fields: survivorFields })
+      }
+    );
+
+    if (!restoreRes.ok) {
+      const err = await restoreRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Failed to restore survivor record');
+    }
+
+    // Step 2: Recreate the deleted record
+    addLog('Recreating deleted record...', 'info');
+    const deletedFields = { ...historyEntry.deletedRecordFields };
+
+    // Remove computed fields from deleted record
+    for (const fieldName of Object.keys(deletedFields)) {
+      if (isComputed(fieldName)) {
+        delete deletedFields[fieldName];
+      }
+    }
+
+    // Add undo tracking to recreated record's Matter_Flatpack
+    if (hasMatterFlatpack) {
+      const recreateEntry = {
+        action: 'RECREATED',
+        originalRecordId: historyEntry.deletedRecordId,
+        fromMergeId: mergeId,
+        timestamp: new Date().toISOString()
+      };
+      deletedFields['Matter_Flatpack'] = appendToMatterFlatpack(deletedFields['Matter_Flatpack'] || '', recreateEntry);
+    }
+
+    const createRes = await fetch(
+      `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${state.credentials.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fields: deletedFields })
+      }
+    );
+
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Failed to recreate deleted record');
+    }
+
+    const restoredSurvivor = await restoreRes.json();
+    const recreatedRecord = await createRes.json();
+
+    // Update local state
+    const survivorIdx = state.records.findIndex(r => r.id === historyEntry.survivorRecordId);
+    if (survivorIdx >= 0) {
+      state.records[survivorIdx] = restoredSurvivor;
+    }
+    state.records.push(recreatedRecord);
+
+    // Mark history entry as undone
+    historyEntry.canUndo = false;
+    historyEntry.undoneAt = new Date().toISOString();
+    historyEntry.newRecordId = recreatedRecord.id; // Store new ID since it will be different
+    saveMergeHistory();
+
+    addLog(`Merge undone successfully! New record ID: ${recreatedRecord.id}`, 'success');
+    elements.recordCount.textContent = `${state.records.length} records loaded`;
+    renderHistory();
+
+    // Re-scan for duplicates since we've changed records
+    if (state.candidates.length > 0) {
+      addLog('Re-scanning for duplicates...', 'info');
+      await scan();
+    }
+  } catch (err) {
+    addLog(`Undo failed: ${err.message}`, 'error');
+  }
+}
+
+// Render history view
+function renderHistory() {
+  const activeHistory = state.mergeHistory.filter(h => h.canUndo);
+  const undoneHistory = state.mergeHistory.filter(h => !h.canUndo);
+
+  elements.historyCount.textContent = `${state.mergeHistory.length} merges recorded (${activeHistory.length} reversible)`;
+  elements.historyEmpty.classList.toggle('hidden', state.mergeHistory.length > 0);
+  elements.historyList.classList.toggle('hidden', state.mergeHistory.length === 0);
+
+  elements.historyList.innerHTML = state.mergeHistory.map(entry => {
+    const time = new Date(entry.timestamp).toLocaleString();
+    const changesCount = entry.fieldChanges?.length || 0;
+
+    return `
+      <div class="history-entry ${entry.canUndo ? '' : 'undone'}" data-merge-id="${entry.mergeId}">
+        <div class="history-meta">
+          <span class="history-time">${time}</span>
+          <span class="tag">${entry.confidence}% match</span>
+        </div>
+        <div class="history-names">
+          <span class="survivor">${escapeHtml(entry.nameA || 'Record A')}</span>
+          <span class="arrow">←</span>
+          <span class="merged">${escapeHtml(entry.nameB || 'Record B')}</span>
+        </div>
+        <details class="history-changes">
+          <summary>${changesCount} field(s) taken from merged record</summary>
+          <div class="history-changes-list">
+            ${entry.fieldChanges?.map(fc => `
+              <div class="history-change-item">
+                <span class="history-change-field">${escapeHtml(fc.field)}</span>:
+                ${escapeHtml(formatValue(fc.oldValue))} → ${escapeHtml(formatValue(fc.newValue))}
+              </div>
+            `).join('') || '<div class="text-muted">No field changes recorded</div>'}
+          </div>
+        </details>
+        <div class="history-actions">
+          ${entry.canUndo ? `
+            <button class="btn small undo" data-action="undo">Undo Merge</button>
+          ` : `
+            <span class="text-muted">Undone at ${new Date(entry.undoneAt).toLocaleString()}</span>
+          `}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Save merge history to sessionStorage
+function saveMergeHistory() {
+  try {
+    sessionStorage.setItem('airtableMergeHistory', JSON.stringify(state.mergeHistory));
+  } catch (e) {
+    addLog('Warning: Could not save merge history to session', 'warning');
+  }
+}
+
+// Load merge history from sessionStorage
+function loadMergeHistory() {
+  try {
+    const saved = sessionStorage.getItem('airtableMergeHistory');
+    if (saved) {
+      state.mergeHistory = JSON.parse(saved);
+      addLog(`Loaded ${state.mergeHistory.length} merge history entries`, 'info');
+    }
+  } catch (e) {
+    state.mergeHistory = [];
+  }
+}
+
+// Clear merge history
+function clearMergeHistory() {
+  if (confirm('Are you sure you want to clear all merge history? This cannot be undone.')) {
+    state.mergeHistory = [];
+    saveMergeHistory();
+    renderHistory();
+    addLog('Merge history cleared', 'info');
+  }
+}
+
 // Disconnect
 function disconnect() {
   clearSavedCredentials();
@@ -1090,7 +1511,8 @@ function disconnect() {
     candidates: [],
     selectedCandidate: null,
     selections: {},
-    logs: state.logs
+    logs: state.logs,
+    mergeHistory: state.mergeHistory // Preserve merge history across disconnects
   };
   elements.candidateList.innerHTML = '';
   elements.scanFilters.classList.add('hidden');
@@ -1186,6 +1608,25 @@ elements.scanNavBtn.addEventListener('click', () => {
 
 elements.disconnectBtn.addEventListener('click', disconnect);
 
+elements.historyNavBtn.addEventListener('click', () => {
+  state.selectedCandidate = null;
+  state.selections = {};
+  setView('history');
+});
+
+elements.clearHistoryBtn.addEventListener('click', clearMergeHistory);
+
+elements.historyList.addEventListener('click', (e) => {
+  const undoBtn = e.target.closest('[data-action="undo"]');
+  if (undoBtn) {
+    const entry = undoBtn.closest('.history-entry');
+    const mergeId = entry?.dataset.mergeId;
+    if (mergeId) {
+      undoMerge(mergeId);
+    }
+  }
+});
+
 elements.clearLogBtn.addEventListener('click', () => {
   state.logs = [];
   renderLogs();
@@ -1222,8 +1663,9 @@ function clearSavedCredentials() {
   sessionStorage.removeItem('airtableCredentials');
 }
 
-// Load credentials on page load
+// Load credentials and merge history on page load
 loadSavedCredentials();
+loadMergeHistory();
   </script>
 </body>
 </html>
