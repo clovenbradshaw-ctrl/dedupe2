@@ -703,9 +703,12 @@ function getName(record) {
   return nameField || record.id;
 }
 
-// Find duplicates in records
-function findDuplicates(records) {
+// Find duplicates in records (async chunked to prevent UI freeze)
+async function findDuplicates(records, onProgress) {
   const candidates = [];
+  const totalPairs = (records.length * (records.length - 1)) / 2;
+  let pairsProcessed = 0;
+  const CHUNK_SIZE = 500; // Process 500 comparisons per chunk
 
   for (let i = 0; i < records.length; i++) {
     for (let j = i + 1; j < records.length; j++) {
@@ -755,6 +758,17 @@ function findDuplicates(records) {
           confidence,
           reasons
         });
+      }
+
+      pairsProcessed++;
+
+      // Yield to UI every CHUNK_SIZE comparisons
+      if (pairsProcessed % CHUNK_SIZE === 0) {
+        if (onProgress) {
+          const percent = Math.round((pairsProcessed / totalPairs) * 100);
+          onProgress(percent, pairsProcessed, totalPairs);
+        }
+        await new Promise(r => setTimeout(r, 0));
       }
     }
   }
@@ -954,6 +968,9 @@ async function connect() {
 
     elements.recordCount.textContent = `${state.records.length} records loaded`;
     setView('scan');
+
+    // Auto-trigger duplicate scan after connecting
+    scan();
   } catch (err) {
     elements.setupError.textContent = err.message;
     elements.setupError.classList.remove('hidden');
@@ -965,18 +982,25 @@ async function connect() {
 }
 
 // Scan for duplicates
-function scan() {
+async function scan() {
   elements.scanBtn.disabled = true;
-  elements.scanBtn.textContent = 'Scanning...';
+  elements.scanBtn.textContent = 'Scanning 0%...';
   addLog('Scanning for duplicates...', 'info');
 
-  setTimeout(() => {
-    state.candidates = findDuplicates(state.records);
+  const onProgress = (percent) => {
+    elements.scanBtn.textContent = `Scanning ${percent}%...`;
+  };
+
+  try {
+    state.candidates = await findDuplicates(state.records, onProgress);
     addLog(`Found ${state.candidates.length} potential duplicates`, 'success');
     renderCandidates();
+  } catch (err) {
+    addLog(`Scan failed: ${err.message}`, 'error');
+  } finally {
     elements.scanBtn.disabled = false;
     elements.scanBtn.textContent = state.candidates.length > 0 ? 'Re-scan' : 'Scan for Duplicates';
-  }, 100);
+  }
 }
 
 // Execute merge
