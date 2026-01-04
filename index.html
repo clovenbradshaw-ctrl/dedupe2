@@ -1313,8 +1313,7 @@ async function bulkMerge() {
           await new Promise(r => setTimeout(r, 200));
         }
 
-        // Update local state
-        state.records = state.records.filter(r => !recordsToDelete.has(r.id));
+        // Update survivor in local records array
         const idx = state.records.findIndex(r => r.id === survivor.id);
         if (idx >= 0) state.records[idx] = updatedRecord;
 
@@ -1328,6 +1327,9 @@ async function bulkMerge() {
       // Rate limiting between groups
       await new Promise(r => setTimeout(r, 300));
     }
+
+    // Update local state after all merges complete
+    state.records = state.records.filter(r => !recordsToDelete.has(r.id));
 
     // Remove processed candidates and clear selection
     state.candidates = state.candidates.filter(c =>
