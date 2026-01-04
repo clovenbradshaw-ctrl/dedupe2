@@ -1,1 +1,1125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Airtable Dedupe</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%2310b981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='35' cy='50' r='25' fill='url(%23g)' opacity='0.8'/%3E%3Ccircle cx='65' cy='50' r='25' fill='url(%23g)' opacity='0.8'/%3E%3Cpath d='M50 30 L50 70' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <style>
+/* Base Reset */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
+:root {
+  --bg: #1a1a2e;
+  --bg-card: #1e293b;
+  --bg-input: #0f172a;
+  --border: #334155;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --primary: #6366f1;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, var(--bg) 0%, #16213e 100%);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* Layout */
+.app {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.header h1 {
+  color: var(--primary);
+  font-size: 1.5rem;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav button {
+  padding: 0.5rem 1rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.nav button:hover,
+.nav button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.main {
+  overflow: auto;
+}
+
+/* Log Panel */
+.log-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.log-header button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.log-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.log-entry {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--bg-input);
+}
+
+.log-entry.success { color: var(--success); }
+.log-entry.error { color: var(--danger); }
+.log-entry.warning { color: var(--warning); }
+.log-time { color: var(--text-muted); margin-right: 0.5rem; }
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.card h2 {
+  margin-bottom: 0.5rem;
+}
+
+/* Forms */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--text-muted);
+}
+
+input, select, textarea {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+input:disabled {
+  opacity: 0.6;
+}
+
+/* Buttons */
+.btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn:hover {
+  background: var(--border);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #4f46e5;
+}
+
+.btn.small {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* Messages */
+.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 0.75rem;
+  color: var(--danger);
+  margin-bottom: 1rem;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+/* Setup */
+.setup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
+/* Scan */
+.scan {
+  padding: 1rem;
+}
+
+.scan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.scan-header h2 {
+  margin-bottom: 0.25rem;
+}
+
+.scan-filters {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.scan-filters input {
+  flex: 1;
+  max-width: 300px;
+}
+
+/* Candidate List */
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.candidate-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.candidate-row:hover {
+  border-color: var(--primary);
+}
+
+.candidate-row.high { border-left: 3px solid var(--success); }
+.candidate-row.medium { border-left: 3px solid var(--warning); }
+.candidate-row.low { border-left: 3px solid var(--danger); }
+
+.confidence .badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  background: var(--primary);
+  color: white;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 0.85rem;
+}
+
+.names {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.names .name {
+  font-weight: 500;
+}
+
+.names .arrow {
+  color: var(--text-muted);
+}
+
+.reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.tag {
+  padding: 0.2rem 0.5rem;
+  background: var(--bg-input);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.empty {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-muted);
+}
+
+/* Review */
+.review {
+  padding: 1rem;
+}
+
+.review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.confidence-badge {
+  background: var(--primary);
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.review-records {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+.record-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+}
+
+.col-a, .col-b {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.label {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.label.keep {
+  background: var(--success);
+  color: white;
+}
+
+.label.merge {
+  background: var(--warning);
+  color: white;
+}
+
+.field-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 150px 1fr 1fr;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.field-row.computed {
+  opacity: 0.5;
+}
+
+.field-row.different {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.field-name {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.field-name .tag {
+  margin-left: 0.5rem;
+}
+
+.field-value {
+  font-size: 0.85rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.field-value:hover:not(.computed *) {
+  background: var(--bg-input);
+}
+
+.field-value.selected {
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid var(--primary);
+}
+
+.review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .log-panel {
+    max-height: 200px;
+  }
+
+  .candidate-row {
+    grid-template-columns: 1fr;
+  }
+
+  .names {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .record-header {
+    grid-template-columns: 1fr;
+  }
+}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Airtable Dedupe</h1>
+      <nav class="nav hidden" id="nav">
+        <button id="scanNavBtn" class="active">Scan</button>
+        <button id="disconnectBtn">Disconnect</button>
+      </nav>
+    </header>
+
+    <main class="main">
+      <!-- Setup View -->
+      <div class="setup" id="setupView">
+        <div class="card">
+          <h2>Connect to Airtable</h2>
+          <p class="text-muted">Enter your Airtable credentials. They stay in your browser.</p>
+
+          <form id="setupForm">
+            <div class="form-group">
+              <label>Personal Access Token</label>
+              <input type="password" id="apiKey" placeholder="pat_..." />
+            </div>
+
+            <div class="form-group">
+              <label>Base ID</label>
+              <input type="text" id="baseId" placeholder="app..." />
+            </div>
+
+            <div class="form-group">
+              <label>Table Name</label>
+              <input type="text" id="tableName" placeholder="Clients" />
+            </div>
+
+            <div class="error hidden" id="setupError"></div>
+
+            <button type="submit" class="btn primary" id="connectBtn">Connect</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Scan View -->
+      <div class="scan hidden" id="scanView">
+        <div class="scan-header">
+          <div>
+            <h2>Duplicate Scanner</h2>
+            <p class="text-muted" id="recordCount">0 records loaded</p>
+          </div>
+          <button class="btn primary" id="scanBtn">Scan for Duplicates</button>
+        </div>
+
+        <div class="scan-filters hidden" id="scanFilters">
+          <input type="text" placeholder="Filter by name..." id="filterInput" />
+          <span class="text-muted" id="filterCount"></span>
+        </div>
+
+        <div class="candidate-list" id="candidateList"></div>
+
+        <div class="empty" id="scanEmpty">
+          <p>Click "Scan for Duplicates" to analyze your records.</p>
+        </div>
+      </div>
+
+      <!-- Review View -->
+      <div class="review hidden" id="reviewView">
+        <div class="review-header">
+          <h2>Review Merge</h2>
+          <div class="confidence-badge" id="reviewConfidence"></div>
+        </div>
+
+        <div class="review-records">
+          <div class="record-header">
+            <div class="col-a">
+              <span class="label keep">KEEP</span>
+              <span class="name" id="nameA"></span>
+            </div>
+            <div class="col-b">
+              <span class="label merge">MERGE</span>
+              <span class="name" id="nameB"></span>
+            </div>
+          </div>
+
+          <div class="field-list" id="fieldList"></div>
+        </div>
+
+        <div class="review-actions">
+          <button class="btn" id="backBtn">Back</button>
+          <button class="btn primary" id="mergeBtn">Merge Records</button>
+        </div>
+      </div>
+    </main>
+
+    <aside class="log-panel">
+      <div class="log-header">
+        <span>Activity Log</span>
+        <button id="clearLogBtn">Clear</button>
+      </div>
+      <div class="log-list" id="logList">
+        <div class="log-entry">Ready</div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+const API_URL = 'https://api.airtable.com/v0';
+
+// State
+let state = {
+  view: 'setup',
+  credentials: null,
+  schema: null,
+  records: [],
+  candidates: [],
+  selectedCandidate: null,
+  selections: {},
+  logs: []
+};
+
+// DOM Elements
+const elements = {
+  nav: document.getElementById('nav'),
+  scanNavBtn: document.getElementById('scanNavBtn'),
+  disconnectBtn: document.getElementById('disconnectBtn'),
+  setupView: document.getElementById('setupView'),
+  scanView: document.getElementById('scanView'),
+  reviewView: document.getElementById('reviewView'),
+  setupForm: document.getElementById('setupForm'),
+  setupError: document.getElementById('setupError'),
+  apiKey: document.getElementById('apiKey'),
+  baseId: document.getElementById('baseId'),
+  tableName: document.getElementById('tableName'),
+  connectBtn: document.getElementById('connectBtn'),
+  recordCount: document.getElementById('recordCount'),
+  scanBtn: document.getElementById('scanBtn'),
+  scanFilters: document.getElementById('scanFilters'),
+  filterInput: document.getElementById('filterInput'),
+  filterCount: document.getElementById('filterCount'),
+  candidateList: document.getElementById('candidateList'),
+  scanEmpty: document.getElementById('scanEmpty'),
+  reviewConfidence: document.getElementById('reviewConfidence'),
+  nameA: document.getElementById('nameA'),
+  nameB: document.getElementById('nameB'),
+  fieldList: document.getElementById('fieldList'),
+  backBtn: document.getElementById('backBtn'),
+  mergeBtn: document.getElementById('mergeBtn'),
+  logList: document.getElementById('logList'),
+  clearLogBtn: document.getElementById('clearLogBtn')
+};
+
+// Logging
+function addLog(message, type = 'info') {
+  const time = new Date().toLocaleTimeString();
+  state.logs.push({ message, type, time });
+  if (state.logs.length > 100) state.logs.shift();
+  renderLogs();
+}
+
+function renderLogs() {
+  if (state.logs.length === 0) {
+    elements.logList.innerHTML = '<div class="log-entry">Ready</div>';
+    return;
+  }
+  elements.logList.innerHTML = state.logs.map(log =>
+    `<div class="log-entry ${log.type}"><span class="log-time">[${log.time}]</span> ${log.message}</div>`
+  ).join('');
+  elements.logList.scrollTop = elements.logList.scrollHeight;
+}
+
+// View management
+function setView(view) {
+  state.view = view;
+  elements.setupView.classList.toggle('hidden', view !== 'setup');
+  elements.scanView.classList.toggle('hidden', view !== 'scan');
+  elements.reviewView.classList.toggle('hidden', view !== 'review');
+  elements.nav.classList.toggle('hidden', view === 'setup');
+  elements.scanNavBtn.classList.toggle('active', view === 'scan');
+}
+
+// Similarity calculation (Levenshtein-based)
+function similarity(a, b) {
+  if (!a || !b) return 0;
+  a = String(a).toLowerCase().trim();
+  b = String(b).toLowerCase().trim();
+  if (a === b) return 1;
+
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+
+  if (longer.length === 0) return 1;
+
+  const costs = [];
+  for (let i = 0; i <= shorter.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= longer.length; j++) {
+      if (i === 0) costs[j] = j;
+      else if (j > 0) {
+        let newValue = costs[j - 1];
+        if (shorter[i - 1] !== longer[j - 1]) {
+          newValue = Math.min(newValue, lastValue, costs[j]) + 1;
+        }
+        costs[j - 1] = lastValue;
+        lastValue = newValue;
+      }
+    }
+    if (i > 0) costs[longer.length] = lastValue;
+  }
+
+  return (longer.length - costs[longer.length]) / longer.length;
+}
+
+// Get display name from record
+function getName(record) {
+  const fields = record.fields;
+  const nameField = fields['Client Name'] || fields['Name'] || fields['Full Name'] ||
+    fields['Company'] || fields['Title'] || Object.values(fields)[0];
+  return nameField || record.id;
+}
+
+// Find duplicates in records
+function findDuplicates(records) {
+  const candidates = [];
+
+  for (let i = 0; i < records.length; i++) {
+    for (let j = i + 1; j < records.length; j++) {
+      const a = records[i];
+      const b = records[j];
+      const nameA = getName(a);
+      const nameB = getName(b);
+
+      const nameSim = similarity(nameA, nameB);
+
+      const emailA = a.fields['Email'] || a.fields['email'] || '';
+      const emailB = b.fields['Email'] || b.fields['email'] || '';
+      const phoneA = String(a.fields['Phone'] || a.fields['phone'] || '').replace(/\D/g, '');
+      const phoneB = String(b.fields['Phone'] || b.fields['phone'] || '').replace(/\D/g, '');
+
+      let confidence = 0;
+      const reasons = [];
+
+      if (emailA && emailB && emailA.toLowerCase() === emailB.toLowerCase()) {
+        confidence = Math.max(confidence, 95);
+        reasons.push('Same email');
+      }
+
+      if (phoneA && phoneB && phoneA === phoneB && phoneA.length >= 7) {
+        confidence = Math.max(confidence, 90);
+        reasons.push('Same phone');
+      }
+
+      if (nameSim >= 0.9) {
+        confidence = Math.max(confidence, 85);
+        reasons.push('Very similar name');
+      } else if (nameSim >= 0.8) {
+        confidence = Math.max(confidence, 75);
+        reasons.push('Similar name');
+      } else if (nameSim >= 0.7) {
+        confidence = Math.max(confidence, 65);
+        reasons.push('Possibly similar name');
+      }
+
+      if (confidence >= 65) {
+        candidates.push({
+          id: `${a.id}-${b.id}`,
+          recordA: a,
+          recordB: b,
+          nameA,
+          nameB,
+          confidence,
+          reasons
+        });
+      }
+    }
+  }
+
+  return candidates.sort((a, b) => b.confidence - a.confidence);
+}
+
+// Check if field is computed (read-only)
+function isComputed(fieldName) {
+  const field = state.schema?.fields?.find(f => f.name === fieldName);
+  return field?.isComputed || false;
+}
+
+// Format value for display
+function formatValue(val) {
+  if (val === undefined || val === null) return '(empty)';
+  if (Array.isArray(val)) return val.join(', ');
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val);
+}
+
+// Render candidates list
+function renderCandidates() {
+  const filter = elements.filterInput.value.toLowerCase();
+  const filtered = filter ?
+    state.candidates.filter(c => c.nameA.toLowerCase().includes(filter) || c.nameB.toLowerCase().includes(filter)) :
+    state.candidates;
+
+  elements.scanFilters.classList.toggle('hidden', state.candidates.length === 0);
+  elements.scanEmpty.classList.toggle('hidden', state.candidates.length > 0);
+  elements.filterCount.textContent = `${filtered.length} of ${state.candidates.length} matches`;
+
+  const toShow = filtered.slice(0, 100);
+  elements.candidateList.innerHTML = toShow.map(c => `
+    <div class="candidate-row ${c.confidence >= 90 ? 'high' : c.confidence >= 75 ? 'medium' : 'low'}" data-id="${c.id}">
+      <div class="confidence"><span class="badge">${c.confidence}%</span></div>
+      <div class="names">
+        <div class="name">${escapeHtml(c.nameA)}</div>
+        <div class="arrow">+</div>
+        <div class="name">${escapeHtml(c.nameB)}</div>
+      </div>
+      <div class="reasons">${c.reasons.map(r => `<span class="tag">${r}</span>`).join('')}</div>
+      <button class="btn small">Review</button>
+    </div>
+  `).join('') + (filtered.length > 100 ?
+    `<div class="text-muted" style="padding: 1rem; text-align: center;">Showing first 100 of ${filtered.length} matches</div>` : '');
+}
+
+// Escape HTML
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Render review fields
+function renderReviewFields() {
+  const { recordA, recordB, nameA, nameB, confidence } = state.selectedCandidate;
+
+  elements.reviewConfidence.textContent = `${confidence}% match`;
+  elements.nameA.textContent = nameA;
+  elements.nameB.textContent = nameB;
+
+  const allFields = [...new Set([...Object.keys(recordA.fields), ...Object.keys(recordB.fields)])].sort();
+
+  elements.fieldList.innerHTML = allFields.map(fieldName => {
+    const valA = recordA.fields[fieldName];
+    const valB = recordB.fields[fieldName];
+    const computed = isComputed(fieldName);
+    const same = JSON.stringify(valA) === JSON.stringify(valB);
+
+    let selected = state.selections[fieldName];
+    if (selected === undefined) {
+      selected = (valA !== undefined && valA !== null && valA !== '') ? 'A' : 'B';
+    }
+
+    return `
+      <div class="field-row ${computed ? 'computed' : ''} ${same ? 'same' : 'different'}">
+        <div class="field-name">
+          ${escapeHtml(fieldName)}
+          ${computed ? '<span class="tag computed">read-only</span>' : ''}
+        </div>
+        <div class="field-value col-a ${!computed && selected === 'A' ? 'selected' : ''}" data-field="${escapeHtml(fieldName)}" data-choice="A">
+          ${escapeHtml(formatValue(valA))}
+        </div>
+        <div class="field-value col-b ${!computed && selected === 'B' ? 'selected' : ''}" data-field="${escapeHtml(fieldName)}" data-choice="B">
+          ${escapeHtml(formatValue(valB))}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Build merged fields
+function buildMergedFields() {
+  const { recordA, recordB } = state.selectedCandidate;
+  const allFields = [...new Set([...Object.keys(recordA.fields), ...Object.keys(recordB.fields)])];
+  const merged = {};
+
+  for (const fieldName of allFields) {
+    if (isComputed(fieldName)) continue;
+
+    let selected = state.selections[fieldName];
+    if (selected === undefined) {
+      const valA = recordA.fields[fieldName];
+      selected = (valA !== undefined && valA !== null && valA !== '') ? 'A' : 'B';
+    }
+
+    const value = selected === 'A' ? recordA.fields[fieldName] : recordB.fields[fieldName];
+    if (value !== undefined && value !== null) {
+      merged[fieldName] = value;
+    }
+  }
+
+  return merged;
+}
+
+// Connect to Airtable
+async function connect() {
+  const apiKey = elements.apiKey.value.trim();
+  const baseId = elements.baseId.value.trim();
+  const tableName = elements.tableName.value.trim();
+
+  if (!apiKey || !baseId || !tableName) {
+    elements.setupError.textContent = 'Please fill in all fields';
+    elements.setupError.classList.remove('hidden');
+    return;
+  }
+
+  elements.setupError.classList.add('hidden');
+  elements.connectBtn.disabled = true;
+  elements.connectBtn.textContent = 'Connecting...';
+  addLog('Connecting to Airtable...', 'info');
+
+  try {
+    // Fetch schema
+    const metaRes = await fetch(`${API_URL}/meta/bases/${baseId}/tables`, {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+
+    if (!metaRes.ok) {
+      const err = await metaRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Failed to connect: ${metaRes.status}`);
+    }
+
+    const metaData = await metaRes.json();
+    const table = metaData.tables.find(t => t.name === tableName || t.id === tableName);
+
+    if (!table) {
+      throw new Error(`Table "${tableName}" not found`);
+    }
+
+    const computedTypes = ['formula', 'rollup', 'count', 'lookup', 'autoNumber', 'createdTime', 'lastModifiedTime', 'createdBy', 'lastModifiedBy'];
+    state.schema = {
+      tableName: table.name,
+      tableId: table.id,
+      fields: table.fields.map(f => ({
+        name: f.name,
+        type: f.type,
+        isComputed: computedTypes.includes(f.type),
+        isLink: f.type === 'multipleRecordLinks'
+      }))
+    };
+
+    addLog(`Found ${state.schema.fields.length} fields`, 'success');
+
+    // Fetch records
+    addLog('Fetching records...', 'info');
+    state.records = [];
+    let offset = null;
+
+    do {
+      const params = new URLSearchParams({ pageSize: '100' });
+      if (offset) params.append('offset', offset);
+
+      const url = `${API_URL}/${baseId}/${encodeURIComponent(tableName)}?${params}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Failed to fetch records: ${res.status}`);
+      }
+
+      const data = await res.json();
+      state.records.push(...data.records);
+      offset = data.offset;
+      addLog(`Loaded ${state.records.length} records...`, 'info');
+
+      if (offset) await new Promise(r => setTimeout(r, 100));
+    } while (offset);
+
+    state.credentials = { apiKey, baseId, tableName };
+    addLog(`Fetched ${state.records.length} total records`, 'success');
+    addLog('Connected to Airtable', 'success');
+
+    elements.recordCount.textContent = `${state.records.length} records loaded`;
+    setView('scan');
+  } catch (err) {
+    elements.setupError.textContent = err.message;
+    elements.setupError.classList.remove('hidden');
+    addLog(err.message, 'error');
+  } finally {
+    elements.connectBtn.disabled = false;
+    elements.connectBtn.textContent = 'Connect';
+  }
+}
+
+// Scan for duplicates
+function scan() {
+  elements.scanBtn.disabled = true;
+  elements.scanBtn.textContent = 'Scanning...';
+  addLog('Scanning for duplicates...', 'info');
+
+  setTimeout(() => {
+    state.candidates = findDuplicates(state.records);
+    addLog(`Found ${state.candidates.length} potential duplicates`, 'success');
+    renderCandidates();
+    elements.scanBtn.disabled = false;
+    elements.scanBtn.textContent = state.candidates.length > 0 ? 'Re-scan' : 'Scan for Duplicates';
+  }, 100);
+}
+
+// Execute merge
+async function merge() {
+  elements.mergeBtn.disabled = true;
+  elements.mergeBtn.textContent = 'Merging...';
+  elements.backBtn.disabled = true;
+  addLog('Starting merge...', 'info');
+
+  try {
+    const mergedFields = buildMergedFields();
+    const { recordA, recordB } = state.selectedCandidate;
+
+    // Update survivor record (A)
+    addLog('Updating survivor record...', 'info');
+    const updateRes = await fetch(
+      `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}/${recordA.id}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${state.credentials.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fields: mergedFields })
+      }
+    );
+
+    if (!updateRes.ok) {
+      const err = await updateRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Failed to update record');
+    }
+
+    // Delete merged record (B)
+    addLog('Deleting duplicate record...', 'info');
+    const deleteRes = await fetch(
+      `${API_URL}/${state.credentials.baseId}/${encodeURIComponent(state.credentials.tableName)}/${recordB.id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${state.credentials.apiKey}`
+        }
+      }
+    );
+
+    if (!deleteRes.ok) {
+      const err = await deleteRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Failed to delete record');
+    }
+
+    // Remove merged records from state
+    state.records = state.records.filter(r => r.id !== recordB.id);
+    const updatedRecord = await updateRes.json();
+    const idx = state.records.findIndex(r => r.id === recordA.id);
+    if (idx >= 0) state.records[idx] = updatedRecord;
+
+    // Remove candidate
+    state.candidates = state.candidates.filter(c => c.id !== state.selectedCandidate.id);
+
+    addLog('Merge completed successfully!', 'success');
+    state.selectedCandidate = null;
+    state.selections = {};
+    elements.recordCount.textContent = `${state.records.length} records loaded`;
+    renderCandidates();
+    setView('scan');
+  } catch (err) {
+    addLog(`Merge failed: ${err.message}`, 'error');
+  } finally {
+    elements.mergeBtn.disabled = false;
+    elements.mergeBtn.textContent = 'Merge Records';
+    elements.backBtn.disabled = false;
+  }
+}
+
+// Disconnect
+function disconnect() {
+  state = {
+    view: 'setup',
+    credentials: null,
+    schema: null,
+    records: [],
+    candidates: [],
+    selectedCandidate: null,
+    selections: {},
+    logs: state.logs
+  };
+  elements.candidateList.innerHTML = '';
+  elements.scanFilters.classList.add('hidden');
+  elements.scanEmpty.classList.remove('hidden');
+  elements.scanBtn.textContent = 'Scan for Duplicates';
+  setView('setup');
+}
+
+// Event listeners
+elements.setupForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  connect();
+});
+
+elements.scanBtn.addEventListener('click', scan);
+
+elements.filterInput.addEventListener('input', renderCandidates);
+
+elements.candidateList.addEventListener('click', (e) => {
+  const row = e.target.closest('.candidate-row');
+  if (row) {
+    const id = row.dataset.id;
+    state.selectedCandidate = state.candidates.find(c => c.id === id);
+    state.selections = {};
+    renderReviewFields();
+    setView('review');
+  }
+});
+
+elements.fieldList.addEventListener('click', (e) => {
+  const cell = e.target.closest('.field-value');
+  if (cell && !cell.closest('.computed')) {
+    const fieldName = cell.dataset.field;
+    const choice = cell.dataset.choice;
+    state.selections[fieldName] = choice;
+    renderReviewFields();
+  }
+});
+
+elements.backBtn.addEventListener('click', () => {
+  state.selectedCandidate = null;
+  state.selections = {};
+  setView('scan');
+});
+
+elements.mergeBtn.addEventListener('click', merge);
+
+elements.scanNavBtn.addEventListener('click', () => {
+  state.selectedCandidate = null;
+  state.selections = {};
+  setView('scan');
+});
+
+elements.disconnectBtn.addEventListener('click', disconnect);
+
+elements.clearLogBtn.addEventListener('click', () => {
+  state.logs = [];
+  renderLogs();
+});
+  </script>
+</body>
+</html>
