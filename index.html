@@ -533,7 +533,10 @@ input:disabled {
             <h2>Duplicate Scanner</h2>
             <p class="text-muted" id="recordCount">0 records loaded</p>
           </div>
-          <button class="btn primary" id="scanBtn">Scan for Duplicates</button>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn" id="showSchemaBtn">Show Schema</button>
+            <button class="btn primary" id="scanBtn">Scan for Duplicates</button>
+          </div>
         </div>
 
         <div class="scan-filters hidden" id="scanFilters">
@@ -619,6 +622,7 @@ const elements = {
   connectBtn: document.getElementById('connectBtn'),
   recordCount: document.getElementById('recordCount'),
   scanBtn: document.getElementById('scanBtn'),
+  showSchemaBtn: document.getElementById('showSchemaBtn'),
   scanFilters: document.getElementById('scanFilters'),
   filterInput: document.getElementById('filterInput'),
   filterCount: document.getElementById('filterCount'),
@@ -1102,6 +1106,46 @@ elements.setupForm.addEventListener('submit', (e) => {
 });
 
 elements.scanBtn.addEventListener('click', scan);
+
+elements.showSchemaBtn.addEventListener('click', () => {
+  if (!state.schema) {
+    addLog('No schema loaded - connect to Airtable first', 'error');
+    return;
+  }
+
+  const schemaOutput = {
+    tableName: state.schema.tableName,
+    tableId: state.schema.tableId,
+    fields: state.schema.fields.map(f => ({
+      name: f.name,
+      type: f.type,
+      isComputed: f.isComputed,
+      isLink: f.isLink
+    }))
+  };
+
+  const schemaJson = JSON.stringify(schemaOutput, null, 2);
+  console.log('=== AIRTABLE SCHEMA ===');
+  console.log(schemaJson);
+  console.log('=== END SCHEMA ===');
+
+  // Copy to clipboard
+  navigator.clipboard.writeText(schemaJson).then(() => {
+    addLog('Schema copied to clipboard! Also logged to console (F12)', 'success');
+  }).catch(() => {
+    addLog('Schema logged to console (F12) - clipboard copy failed', 'warning');
+  });
+
+  // Log summary to activity log
+  addLog(`Schema: ${state.schema.tableName} (${state.schema.fields.length} fields)`, 'info');
+  state.schema.fields.forEach(f => {
+    const tags = [];
+    if (f.isComputed) tags.push('computed');
+    if (f.isLink) tags.push('link');
+    const tagStr = tags.length ? ` [${tags.join(', ')}]` : '';
+    addLog(`  - ${f.name}: ${f.type}${tagStr}`, 'info');
+  });
+});
 
 elements.filterInput.addEventListener('input', renderCandidates);
 
