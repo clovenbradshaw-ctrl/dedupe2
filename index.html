@@ -963,6 +963,7 @@ async function connect() {
     } while (offset);
 
     state.credentials = { apiKey, baseId, tableName };
+    saveCredentials(apiKey, baseId, tableName);
     addLog(`Fetched ${state.records.length} total records`, 'success');
     addLog('Connected to Airtable', 'success');
 
@@ -1076,6 +1077,7 @@ async function merge() {
 
 // Disconnect
 function disconnect() {
+  clearSavedCredentials();
   state = {
     view: 'setup',
     credentials: null,
@@ -1144,6 +1146,40 @@ elements.clearLogBtn.addEventListener('click', () => {
   state.logs = [];
   renderLogs();
 });
+
+// Load saved credentials from sessionStorage on page load
+function loadSavedCredentials() {
+  const saved = sessionStorage.getItem('airtableCredentials');
+  if (saved) {
+    try {
+      const creds = JSON.parse(saved);
+      elements.apiKey.value = creds.apiKey || '';
+      elements.baseId.value = creds.baseId || '';
+      elements.tableName.value = creds.tableName || '';
+      addLog('Loaded saved credentials from session', 'info');
+    } catch (e) {
+      // Invalid data, clear it
+      sessionStorage.removeItem('airtableCredentials');
+    }
+  }
+}
+
+// Save credentials to sessionStorage
+function saveCredentials(apiKey, baseId, tableName) {
+  sessionStorage.setItem('airtableCredentials', JSON.stringify({
+    apiKey,
+    baseId,
+    tableName
+  }));
+}
+
+// Clear saved credentials
+function clearSavedCredentials() {
+  sessionStorage.removeItem('airtableCredentials');
+}
+
+// Load credentials on page load
+loadSavedCredentials();
   </script>
 </body>
 </html>
