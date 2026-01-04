@@ -651,6 +651,15 @@ input:disabled {
           </div>
         </div>
 
+        <!-- Match Field Selection -->
+        <div class="match-fields-config" id="matchFieldsConfig" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h3 style="font-size: 0.95rem; color: var(--text);">Match Fields</h3>
+            <span class="text-muted" style="font-size: 0.8rem;">Select fields to find duplicates (exact match uses fast indexing)</span>
+          </div>
+          <div id="matchFieldsList" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+        </div>
+
         <div class="scan-filters hidden" id="scanFilters">
           <input type="text" placeholder="Filter by name..." id="filterInput" />
           <span class="text-muted" id="filterCount"></span>
@@ -735,7 +744,8 @@ let state = {
   selectedCandidate: null,
   selections: {},
   logs: [],
-  mergeHistory: [] // Track all merges for undo capability
+  mergeHistory: [], // Track all merges for undo capability
+  matchFields: {} // Track which fields to use for matching {fieldName: {enabled: bool, type: 'exact'|'fuzzy'}}
 };
 
 // DOM Elements
@@ -761,6 +771,8 @@ const elements = {
   recordCount: document.getElementById('recordCount'),
   scanBtn: document.getElementById('scanBtn'),
   showSchemaBtn: document.getElementById('showSchemaBtn'),
+  matchFieldsConfig: document.getElementById('matchFieldsConfig'),
+  matchFieldsList: document.getElementById('matchFieldsList'),
   scanFilters: document.getElementById('scanFilters'),
   filterInput: document.getElementById('filterInput'),
   filterCount: document.getElementById('filterCount'),
@@ -848,72 +860,244 @@ function getName(record) {
   return nameField || record.id;
 }
 
-// Find duplicates in records (async chunked to prevent UI freeze)
+// Render match fields selector based on schema
+function renderMatchFields() {
+  if (!state.schema?.fields) {
+    elements.matchFieldsList.innerHTML = '<span class="text-muted">Load data to see available fields</span>';
+    return;
+  }
+
+  // Common match field patterns (prioritize these)
+  const priorityPatterns = ['name', 'email', 'phone', 'a#', 'ppid', 'id', 'client', 'company'];
+
+  // Get non-computed text/number fields suitable for matching
+  const matchableFields = state.schema.fields.filter(f =>
+    !f.isComputed &&
+    ['singleLineText', 'multilineText', 'email', 'phoneNumber', 'number', 'autoNumber'].includes(f.type)
+  );
+
+  // Sort: priority fields first, then alphabetically
+  matchableFields.sort((a, b) => {
+    const aLower = a.name.toLowerCase();
+    const bLower = b.name.toLowerCase();
+    const aPriority = priorityPatterns.some(p => aLower.includes(p));
+    const bPriority = priorityPatterns.some(p => bLower.includes(p));
+    if (aPriority && !bPriority) return -1;
+    if (!aPriority && bPriority) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Initialize matchFields state if empty - auto-select likely match fields
+  if (Object.keys(state.matchFields).length === 0) {
+    matchableFields.forEach(f => {
+      const nameLower = f.name.toLowerCase();
+      const isNameField = nameLower.includes('name') || nameLower.includes('client') || nameLower.includes('company');
+      const isExactField = nameLower.includes('email') || nameLower.includes('phone') ||
+                           nameLower.includes('a#') || nameLower.includes('ppid') || nameLower === 'id';
+
+      // Auto-enable fields that match common patterns
+      if (isNameField || isExactField) {
+        state.matchFields[f.name] = {
+          enabled: true,
+          type: isNameField ? 'fuzzy' : 'exact'
+        };
+      }
+    });
+  }
+
+  elements.matchFieldsList.innerHTML = matchableFields.map(f => {
+    const config = state.matchFields[f.name] || { enabled: false, type: 'exact' };
+    const isChecked = config.enabled ? 'checked' : '';
+    const matchType = config.type || 'exact';
+
+    return `
+      <label style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem;
+                    background: ${config.enabled ? 'rgba(99, 102, 241, 0.2)' : 'var(--bg-input)'};
+                    border: 1px solid ${config.enabled ? 'var(--primary)' : 'var(--border)'};
+                    border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+        <input type="checkbox" data-field="${f.name}" ${isChecked} style="cursor: pointer;">
+        <span>${f.name}</span>
+        <select data-field-type="${f.name}" style="padding: 0.2rem; font-size: 0.75rem; background: var(--bg-input);
+                border: 1px solid var(--border); border-radius: 3px; color: var(--text);">
+          <option value="exact" ${matchType === 'exact' ? 'selected' : ''}>Exact</option>
+          <option value="fuzzy" ${matchType === 'fuzzy' ? 'selected' : ''}>Fuzzy</option>
+        </select>
+      </label>
+    `;
+  }).join('');
+
+  // Add event listeners
+  elements.matchFieldsList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const fieldName = e.target.dataset.field;
+      if (!state.matchFields[fieldName]) {
+        state.matchFields[fieldName] = { enabled: false, type: 'exact' };
+      }
+      state.matchFields[fieldName].enabled = e.target.checked;
+      renderMatchFields(); // Re-render to update styling
+    });
+  });
+
+  elements.matchFieldsList.querySelectorAll('select').forEach(sel => {
+    sel.addEventListener('change', (e) => {
+      const fieldName = e.target.dataset.fieldType;
+      if (!state.matchFields[fieldName]) {
+        state.matchFields[fieldName] = { enabled: false, type: 'exact' };
+      }
+      state.matchFields[fieldName].type = e.target.value;
+    });
+  });
+}
+
+// Normalize value for matching
+function normalizeValue(val) {
+  if (val === null || val === undefined) return '';
+  return String(val).toLowerCase().trim();
+}
+
+// Find duplicates using hash-based indexing for exact matches (O(n)) and Levenshtein for fuzzy (O(n²))
 async function findDuplicates(records, onProgress) {
   const candidates = [];
-  const totalPairs = (records.length * (records.length - 1)) / 2;
-  let pairsProcessed = 0;
-  const CHUNK_SIZE = 500; // Process 500 comparisons per chunk
+  const candidateSet = new Set(); // Track unique pairs
 
-  for (let i = 0; i < records.length; i++) {
-    for (let j = i + 1; j < records.length; j++) {
-      const a = records[i];
-      const b = records[j];
-      const nameA = getName(a);
-      const nameB = getName(b);
+  // Get enabled match fields
+  const enabledFields = Object.entries(state.matchFields)
+    .filter(([_, config]) => config.enabled)
+    .map(([name, config]) => ({ name, type: config.type }));
 
-      const nameSim = similarity(nameA, nameB);
+  if (enabledFields.length === 0) {
+    addLog('No match fields selected - please select at least one field', 'warning');
+    return [];
+  }
 
-      const emailA = a.fields['Email'] || a.fields['email'] || '';
-      const emailB = b.fields['Email'] || b.fields['email'] || '';
-      const phoneA = String(a.fields['Phone'] || a.fields['phone'] || '').replace(/\D/g, '');
-      const phoneB = String(b.fields['Phone'] || b.fields['phone'] || '').replace(/\D/g, '');
+  const exactFields = enabledFields.filter(f => f.type === 'exact');
+  const fuzzyFields = enabledFields.filter(f => f.type === 'fuzzy');
 
-      let confidence = 0;
-      const reasons = [];
+  addLog(`Matching on ${enabledFields.length} fields: ${enabledFields.map(f => `${f.name} (${f.type})`).join(', ')}`);
 
-      if (emailA && emailB && emailA.toLowerCase() === emailB.toLowerCase()) {
-        confidence = Math.max(confidence, 95);
-        reasons.push('Same email');
-      }
+  // PHASE 1: Hash-based exact matching - O(n) per field
+  if (exactFields.length > 0) {
+    if (onProgress) onProgress(0, 0, 1);
 
-      if (phoneA && phoneB && phoneA === phoneB && phoneA.length >= 7) {
-        confidence = Math.max(confidence, 90);
-        reasons.push('Same phone');
-      }
+    for (const field of exactFields) {
+      const valueIndex = new Map(); // value -> [record indices]
 
-      if (nameSim >= 0.9) {
-        confidence = Math.max(confidence, 85);
-        reasons.push('Very similar name');
-      } else if (nameSim >= 0.8) {
-        confidence = Math.max(confidence, 75);
-        reasons.push('Similar name');
-      } else if (nameSim >= 0.7) {
-        confidence = Math.max(confidence, 65);
-        reasons.push('Possibly similar name');
-      }
-
-      if (confidence >= 65) {
-        candidates.push({
-          id: `${a.id}-${b.id}`,
-          recordA: a,
-          recordB: b,
-          nameA,
-          nameB,
-          confidence,
-          reasons
-        });
-      }
-
-      pairsProcessed++;
-
-      // Yield to UI every CHUNK_SIZE comparisons
-      if (pairsProcessed % CHUNK_SIZE === 0) {
-        if (onProgress) {
-          const percent = Math.round((pairsProcessed / totalPairs) * 100);
-          onProgress(percent, pairsProcessed, totalPairs);
+      // Build index
+      records.forEach((record, idx) => {
+        const val = normalizeValue(record.fields[field.name]);
+        if (val && val.length > 0) {
+          if (!valueIndex.has(val)) {
+            valueIndex.set(val, []);
+          }
+          valueIndex.get(val).push(idx);
         }
-        await new Promise(r => setTimeout(r, 0));
+      });
+
+      // Find duplicates from index - only groups with 2+ records
+      for (const [val, indices] of valueIndex) {
+        if (indices.length >= 2) {
+          // Create pairs from all records with same value
+          for (let i = 0; i < indices.length; i++) {
+            for (let j = i + 1; j < indices.length; j++) {
+              const a = records[indices[i]];
+              const b = records[indices[j]];
+              const pairKey = [a.id, b.id].sort().join('-');
+
+              if (!candidateSet.has(pairKey)) {
+                candidateSet.add(pairKey);
+                candidates.push({
+                  id: pairKey,
+                  recordA: a,
+                  recordB: b,
+                  nameA: getName(a),
+                  nameB: getName(b),
+                  confidence: 95,
+                  reasons: [`Same ${field.name}`]
+                });
+              }
+            }
+          }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 0)); // Yield to UI
+    }
+
+    addLog(`Found ${candidates.length} exact matches via indexing`, 'success');
+  }
+
+  // PHASE 2: Fuzzy matching with Levenshtein (only if fuzzy fields enabled)
+  if (fuzzyFields.length > 0) {
+    const totalPairs = (records.length * (records.length - 1)) / 2;
+    let pairsProcessed = 0;
+    const CHUNK_SIZE = 1000;
+
+    for (let i = 0; i < records.length; i++) {
+      for (let j = i + 1; j < records.length; j++) {
+        const a = records[i];
+        const b = records[j];
+        const pairKey = [a.id, b.id].sort().join('-');
+
+        // Skip if already found via exact match
+        if (!candidateSet.has(pairKey)) {
+          let bestSimilarity = 0;
+          let bestField = null;
+
+          for (const field of fuzzyFields) {
+            const valA = normalizeValue(a.fields[field.name]);
+            const valB = normalizeValue(b.fields[field.name]);
+
+            if (valA && valB) {
+              // Quick exact check first
+              if (valA === valB) {
+                bestSimilarity = 1;
+                bestField = field.name;
+                break;
+              }
+
+              const sim = similarity(valA, valB);
+              if (sim > bestSimilarity) {
+                bestSimilarity = sim;
+                bestField = field.name;
+              }
+            }
+          }
+
+          if (bestSimilarity >= 0.7) {
+            candidateSet.add(pairKey);
+            let confidence, reason;
+            if (bestSimilarity >= 0.9) {
+              confidence = 85;
+              reason = `Very similar ${bestField}`;
+            } else if (bestSimilarity >= 0.8) {
+              confidence = 75;
+              reason = `Similar ${bestField}`;
+            } else {
+              confidence = 65;
+              reason = `Possibly similar ${bestField}`;
+            }
+
+            candidates.push({
+              id: pairKey,
+              recordA: a,
+              recordB: b,
+              nameA: getName(a),
+              nameB: getName(b),
+              confidence,
+              reasons: [reason]
+            });
+          }
+        }
+
+        pairsProcessed++;
+
+        if (pairsProcessed % CHUNK_SIZE === 0) {
+          if (onProgress) {
+            const percent = Math.round((pairsProcessed / totalPairs) * 100);
+            onProgress(percent, pairsProcessed, totalPairs);
+          }
+          await new Promise(r => setTimeout(r, 0));
+        }
       }
     }
   }
@@ -1079,6 +1263,10 @@ async function connect() {
     };
 
     addLog(`Found ${state.schema.fields.length} fields`, 'success');
+
+    // Render match fields selector
+    state.matchFields = {}; // Reset for new connection
+    renderMatchFields();
 
     // Fetch records
     addLog('Fetching records...', 'info');
